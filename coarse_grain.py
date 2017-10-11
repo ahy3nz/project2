@@ -1,10 +1,18 @@
+import pdb
+import numpy as np
+import mbuild as mb
+import mdtraj
+import json
+from parmed.periodic_table import Mass
+from collections import OrderedDict
+
 """ Forward-mapping an mbuild compound
 
 
 1) Specify a mapping procedure
     a) Provide mapping files in .json format
     b) Provide heuristic like 3:1
-2) Provide a topology of molecules (so the system has knowledge of
+2) Provide a "table of contetns" of molecules (so the system has knowledge of
     which atoms group together to form a molecule)
     a) Gromacs already has molecule information
     b) Hoomd/lammps do not have molecule information
@@ -20,18 +28,20 @@
     b) If given heuristics, then assume linear bonding pattern?
 
 """
-import pdb
-import numpy as np
-import mbuild as mb
-import mdtraj
-import json
-from parmed.periodic_table import Mass
-from collections import OrderedDict
-
 
 def coarse_grain(fine_grained, heuristic=None, mapping_files=[], 
         table_of_contents=None):
-    """
+    """ Coarse grain an mb.Compound
+
+    Parameters
+    ---------
+    fine_grained : mb.Compound
+        original structure
+    heuristic : str
+        General mapping scheme i.e. '3:1'
+    mapping_files : list of .json files
+        json file specify residue names, mappings, and bonds
+
      Molecular conversions should be a dictionary whose keys are cg beads
      and indices correspond to the global atom indices
      Table of contents matches molecules to global atom indices
@@ -43,38 +53,41 @@ def coarse_grain(fine_grained, heuristic=None, mapping_files=[],
     # Mapping files denote a list of json files to create a large dictionary
     elif mapping_files:
 
-        # Load in the mapping files into mapping_info
-        mapping_info = {}
+        # Load in the mapping files into mapping_template
+        mapping_template = {}
         for json_file in mapping_files:
             print("Loading json mapping <{}>".format(json_file))
-            mapping_info.update(json.load(open(json_file,'r'), object_pairs_hook=OrderedDict))
+            mapping_template.update(json.load(open(json_file,'r'), 
+                object_pairs_hook=OrderedDict))
 
-        # Create a table of contents to match molecuels to global atom indices
+        # Create a table of contents to match molecules to global atom indices
         if not table_of_contents:
             print("Generating table of contents")
-            table_of_contents = _extract_molecules(fine_grained, mapping_info)
+            table_of_contents = _extract_molecules(fine_grained, mapping_template)
         else:
             print("Loading table of contents <{table_of_contents}>".format(**locals()))
             table_of_contents = json.load(open(table_of_contents,'r'))
 
 
-        # Combine table of contents and mapping info
-        # Generate dictionary whose keys are cg beads and values are global 
-        # atom indices
-        # And generate a list of cg bonds
-        molecular_conversions, cg_bonds = _apply_mapping( 
-                table_of_contents, mapping_info)
+        # Combine table of contents and mapping template
+        # Create cg_system container for molecules and related beads
+        # Identify bonds in the cg_system
+        # Create the cg_hierarchy
+        cg_system, cg_bonds, cg_hierarchy = _create_cg_outline(table_of_contents, 
+                mapping_template)
     else:
-        print("More coarse-graining parameters necessary, returning original compound")
+        print("More coarse-graining parameters needed, returning original compound")
         return fine_grained
 
-    coarse_grained = _convert_xyz(fine_grained, molecular_conversions)
+    # Calculate centers of masses of groups of atoms to add particles
+    # to cg_system
+    cg_system = _fill_cg_outline(fine_grained, cg_system, cg_hierarchy)
+
     # Apply bonding
-    coarse_grained_bonded = _apply_bonding(coarse_grained, cg_bonds)
+    cg_system = _apply_bonding(cg_system, cg_bonds)
+    return cg_system
 
-    # Save
-    coarse_grained.save('cg.mol2',overwrite=True)
-
+    
 def _apply_bonding(coarse_grained, cg_bonds):
     """ Apply bonds between CG beads
 
@@ -87,71 +100,96 @@ def _apply_bonding(coarse_grained, cg_bonds):
     -------
     cg_bonded : mb.Compound
     """
+    particles = [p for p in coarse_grained.particles()]
     for bead_i, bead_j in cg_bonds:
-        pdb.set_trace()
-        coarse_grained.add_bond([coarse_grained.children[bead_i], 
-                                coarse_grained.children[bead_j]])
+        coarse_grained.add_bond([particles[bead_i], 
+                                particles[bead_j]])
     return coarse_grained
 
-def _convert_xyz(fine_grained, molecular_conversions):
-    """ Use molecular_converions to fwd map the fine_grained
+def _fill_cg_outline(fine_grained, cg_system, cg_hierarchy):
+    """ Add particles to cg system
 
     Parameters
     ----------
-    molecular_conversions : list of lists
-        [CG_bead, [global atom indices]]
-        index of list corresponds to bead index
-
+    fine_grained : mb.Compound
+        original structure
+    cg_system : mb.compound
+        At this stage, no particles/beads added, but hierarachy established
+    cg_hierarchy : OrderedDict()
+        {molecule : {bead : [global atom indices]}}
     """
-    cg_system = mb.Compound()
-    for bead, atom_indices in molecular_conversions:
-        new_bead = mb.Compound(name=bead.split("-")[0], pos=_compute_center_of_mass(fine_grained, atom_indices))
-        cg_system.add(new_bead)
+    
+    for cg_molecule in cg_hierarchy.keys():
+        for bead in cg_hierarchy[cg_molecule]:
+            new_bead = mb.Compound(name=bead.split("-")[0], 
+                    pos=_compute_center_of_mass(fine_grained, cg_hierarchy[cg_molecule][bead]))
+            cg_molecule.add(new_bead)
+        #cg_system.add(cg_molecule)
 
     return cg_system
 
 
     
 
-def _apply_mapping(table_of_contents, mapping_info):
+def _create_cg_outline(table_of_contents, mapping_template):
     """ Read mapping.json files to outline molecular conversions
 
     table_of_contents : dict
-        {resname : [global_atom_indices]}
-    mapping_info : dict
+        {resname-resindex : [global_atom_indices]}
+    mapping_template : dict
         loaded-in json file
 
     Returns
     -------
-    molecular_conversions : list of lists
-        [CG_bead, [global atom indices]]
-        index of list corresponds to bead index
+    cg_system : mb.compound
+        At this stage, no particles/beads added, but hierarachy established
+    cg_bonds : list of tuples (2, n_beads)
+        A list of 2-tuples that specifies bonded beads
+    cg_hierarchy : OrderedDict()
+        {mb.Compound molecule : {str bead : [global atom indices]}}
+
     """
-    molecular_conversions = []
     cg_bonds = []
-    # Using mapping_info's local atom indices,
-    # Shift them by the global atom indices to 
-    # Add the CG bead to a list of global atom indices
+    cg_system= mb.Compound()
+    cg_hierarchy = OrderedDict()
+
+    # Iterate molecule by molecule
+    bead_counter = 0
     for molecule in table_of_contents.keys():
         molecule_name = molecule.split("-")[0]
-        global_atom_indices = table_of_contents[molecule]
-        first_bead_index = len(molecular_conversions)
 
-        for bead in mapping_info[molecule_name]['map'].keys():
-            updated_atom_indices = [local_index + global_atom_indices[0] for local_index in mapping_info[molecule_name]['map'][bead]['children']]
-            molecular_conversions.append([bead,updated_atom_indices])
+        cg_molecule = mb.Compound(name=molecule_name)
+        cg_system.add(cg_molecule)
+        cg_hierarchy.update({cg_molecule:{}})
+
+        global_atom_indices = table_of_contents[molecule]
+
 
         # Update bonding for global BEAD indices
-        for bead_i, bead_j in mapping_info[molecule_name]['bond']:
-            cg_bonds.append([bead_i + first_bead_index, 
-                        bead_j + first_bead_index])
+        # Take the mapping's local bonding
+        # And shift appropriately by the global bead indices
+        # Which is just the number of beads we've added 
+        # before anything in this new molecule
+        for bead_i, bead_j in mapping_template[molecule_name]['bond']:
+            cg_bonds.append([bead_i + bead_counter, 
+                        bead_j + bead_counter])
+
+        # Take the mapping's local atom indices
+        # And shift them appropriately by the global atom indices
+        # Which is just adding the global atom index of the first
+        # atom in the new molecule
+        for bead in mapping_template[molecule_name]['map'].keys():
+            updated_atom_indices = [local_index + global_atom_indices[0] for local_index in mapping_template[molecule_name]['map'][bead]]
+            cg_hierarchy[cg_molecule].update({bead: updated_atom_indices})
+            bead_counter+=1
 
 
+    
 
-    return molecular_conversions, cg_bonds
+    return cg_system, cg_bonds, cg_hierarchy
 
 
-def _extract_molecules(fine_grained, mapping_info):
+def _extract_molecules(fine_grained, mapping_template):
     """ From the structure file,
     be able to determine what molecule or residue each atom belongs to
     This should be easy with gro files,
@@ -161,10 +199,10 @@ def _extract_molecules(fine_grained, mapping_info):
     Currently this is being implemented as a dict
     """
     has_res_information = True
-    residues = [item for item in mapping_info.keys()]
+    residues = [item for item in mapping_template.keys()]
     table_of_contents = OrderedDict()
     if has_res_information:
-        traj = mdtraj.load('lots.gro')
+        traj = mdtraj.load('testing/two_propane.gro')
         for residue in traj.topology.residues:
             indices = [at.index for at in residue.atoms]
             table_of_contents.update({residue.name + "-" + str(residue.index): indices})
@@ -183,17 +221,20 @@ def _compute_center_of_mass(fine_grained, atom_indices):
     total_mass = sum(masses)
     com = np.ndarray(3)
     for i in range(3):
-        com[i] = sum([fine_grained.children[index].pos[i]*mass/total_mass for index,mass in zip(atom_indices,masses)])
+        com[i] = sum([fine_grained.children[index].pos[i]*mass/total_mass 
+            for index,mass in zip(atom_indices,masses)])
     return com 
 
 
 
 if __name__ == "__main__":
-    #fine_grained = mb.load('propane.mol2')
-    fine_grained = mb.load('two_propane.gro')
+    fine_grained = mb.load('testing/two_propane.gro')
     fine_grained.name="PR3"
-    #toc = None
-    toc = "two_propane_toc.json"
-    coarse_grained = coarse_grain(fine_grained, mapping_files=["propane.json"], 
-            table_of_contents=toc)
+    toc = "testing/two_propane_toc.json"
 
+    coarse_grained = coarse_grain(fine_grained, mapping_files=["testing/propane.json"], table_of_contents=toc)
+
+    # Save
+    coarse_grained.save('cg.top',overwrite=True)
+    coarse_grained.save('cg.gro',overwrite=True, residues=['PR3'])
+    coarse_grained.save('cg.mol2',overwrite=True)
