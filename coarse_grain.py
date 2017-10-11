@@ -13,12 +13,19 @@ from collections import OrderedDict
     a) Provide mapping files in .json format
     b) Provide heuristic like 3:1
 2) Provide a "table of contetns" of molecules (so the system has knowledge of
-    which atoms group together to form a molecule)
-    a) Gromacs already has molecule information
-    b) Hoomd/lammps do not have molecule information
+    which molecules contain which atoms)
+    a) Generate table of contents from structure file
+        i) Gromacs is easy, already has molecule/residue info
+        ii) Hoomd/lammps do not have molecule/residue info
+    b) Supply a table of contents file
+        i) This is json file mapping- 
+            str(residuename-residueindex) : [global_atom_indices]
     c) If given heuristic information then start grouping together atoms 
         solely based on the fine-grained bonding patterns
-    d) Create a cg hierarchy cg-system -> molecules -> cg-beads -> atom_indices
+        i) Utilize bondgraphs and finding neighbors
+    d) All methods should create a cg hierarchy 
+        cg-system (mb.Compound)-> molecules (mb.Compound)-> 
+        cg-beads(str) -> atom_indices([int])
 3) Do converting
     a) Iterate through the cg hierarchy, filling in the cg-system with particles
 4) Create bonds
@@ -26,9 +33,22 @@ from collections import OrderedDict
         specified
     b) If given heuristics, then assume linear bonding pattern?
 
+cg_hierarchy
+------------
+cg_system (mb.Compound)
+    cg_molecule (mb.Compound)
+        cg_bead (str(bead_type-local_bead_index))
+            global_atom_indices ([int])
+        cg_bead (str)
+        cg_bead (str)
+    cg_molecule (mb.Compound)
+    cg_molecule (mb.Compound)
+
+
+
 """
 
-def coarse_grain(fine_grained, heuristic=None, mapping_files=[], 
+def forward_map(fine_grained, heuristic=None, mapping_files=[], 
         table_of_contents=None, dump_toc=True):
     """ Coarse grain an mb.Compound
 
@@ -85,7 +105,7 @@ def coarse_grain(fine_grained, heuristic=None, mapping_files=[],
 
     # Calculate centers of masses of groups of atoms to add particles
     # to cg_system
-    print("Filling compound with particlces")
+    print("Filling compound with particles")
     cg_system = _fill_cg_outline(fine_grained, cg_system, cg_hierarchy)
 
     # Apply bonding
@@ -189,9 +209,6 @@ def _create_cg_outline(table_of_contents, mapping_template):
             cg_hierarchy[cg_molecule].update({bead: updated_atom_indices})
             bead_counter+=1
 
-
-    
-
     return cg_system, cg_bonds, cg_hierarchy
 
 
@@ -235,13 +252,17 @@ def _compute_center_of_mass(fine_grained, atom_indices):
 
 
 if __name__ == "__main__":
-    fine_grained = mb.load('testing/bulk_DSPC_900K.gro')
-    fine_grained.name="DSPC"
-    toc = None
+    fine_grained = mb.load('testing/two_propane.gro')
+    mapping_files =['testing/propane.json']
+    fine_grained.name = ""
+    toc = 'testing/two_propane_toc.json'
 
-    coarse_grained = coarse_grain(fine_grained, mapping_files=["testing/DSPC.json"], table_of_contents=toc)
+    coarse_grained = forward_map(fine_grained, mapping_files=mapping_files, table_of_contents=toc)
 
     # Save
-    coarse_grained.save('cg.top',overwrite=True)
-    coarse_grained.save('cg.gro',overwrite=True, residues=['PR3'])
-    coarse_grained.save('cg.mol2',overwrite=True)
+    coarse_grained.save('fwd_map.top',overwrite=True)
+    coarse_grained.save('fwd_map.gro',overwrite=True, residues=['PR3'])
+    coarse_grained.save('fwd_map.mol2',overwrite=True, residues=['PR3'])
+
+
+    ## here comes the reversemapping
