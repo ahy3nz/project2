@@ -37,15 +37,25 @@ cg_hierarchy
 ------------
 cg_system (mb.Compound)
     cg_molecule (mb.Compound)
-        cg_bead (str(bead_type-local_bead_index))
+        cg_bead (str(bead_type + "-" + local_bead_index))
             global_atom_indices ([int])
         cg_bead (str)
         cg_bead (str)
     cg_molecule (mb.Compound)
     cg_molecule (mb.Compound)
 
+"""
+""" Reverse-mapping an mbuild compound
 
-
+1) Specify a mapping procedure
+    a) .json format
+    b) Should relate a cg_local_index to atomtypes
+2) Obtain "table of contents" to that relates molecule to respective beads
+    a) str(residuename-residueindex): [global_bead_indices]
+3) Do converting
+    a) For each bead, replace it with atom-particles centered around that point
+        i) This could be accomplished using mb.Spherepattern
+4) Create bonds
 """
 
 def forward_map(fine_grained, heuristic=None, mapping_files=[], 
@@ -196,7 +206,7 @@ def _create_cg_outline(table_of_contents, mapping_template):
         # And shift appropriately by the global bead indices
         # Which is just the number of beads we've added 
         # before anything in this new molecule
-        for bead_i, bead_j in mapping_template[molecule_name]['bond']:
+        for bead_i, bead_j in mapping_template[molecule_name]['cg_bond']:
             cg_bonds.append([bead_i + bead_counter, 
                         bead_j + bead_counter])
 
@@ -204,8 +214,8 @@ def _create_cg_outline(table_of_contents, mapping_template):
         # And shift them appropriately by the global atom indices
         # Which is just adding the global atom index of the first
         # atom in the new molecule
-        for bead in mapping_template[molecule_name]['map'].keys():
-            updated_atom_indices = [local_index + global_atom_indices[0] for local_index in mapping_template[molecule_name]['map'][bead]]
+        for bead in mapping_template[molecule_name]['fwd_map'].keys():
+            updated_atom_indices = [local_index + global_atom_indices[0] for local_index in mapping_template[molecule_name]['fwd_map'][bead]]
             cg_hierarchy[cg_molecule].update({bead: updated_atom_indices})
             bead_counter+=1
 
@@ -266,3 +276,4 @@ if __name__ == "__main__":
 
 
     ## here comes the reversemapping
+    recovered = reverse_map(
