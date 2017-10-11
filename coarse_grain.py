@@ -28,6 +28,7 @@ def coarse_grain(fine_grained, heuristic=None, mapping_file=None):
     if not heuristic:
         molecular_conversions = _apply_heuristic(fine_grain, heuristic)
     elif not mapping_file:
+        molecule_info = _extract_molecules(fine_grained)
         molecular_conversions = _apply_mapping(fine_grain, mapping_file)
     else:
         return fine_grained
@@ -45,6 +46,17 @@ def _apply_mapping(fine_grained, mapping_file):
 
     """
     return None
+
+def _extract_molecules(fine_grained):
+    """ From the structure file,
+    be able to determine what molecule or residue each atom belongs to
+    This should be easy with gro files,
+    With hoomd/lammps files, there are no molecules/residues so this 
+    has to be provided or somehow inferred
+    """
+
+    return None
+
 
 def _convert(fine_grained, molecular_conversions):
     """ Use molecular_converions to fwd map the fine_grained
