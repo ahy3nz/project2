@@ -1,0 +1,30 @@
+{
+    "propane":
+    {
+        "n_beads": 3,
+        "n_children": 11,
+        "map":
+        {
+            "CH3": 
+            {
+                "index": 0,
+                "children": [0,2,3,4]
+            },
+            "CH2": 
+            {
+                "index": 1,
+                "children": [1,6,7]
+            },
+            "CH3": 
+            {
+                "index": 2,
+                "children": [5,8,9,10]
+            }
+        },
+        "bond":
+        {
+            [0,1],
+            [1,2]
+        }
+    }
+}
