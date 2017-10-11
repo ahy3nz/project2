@@ -17,11 +17,10 @@ from collections import OrderedDict
     a) Gromacs already has molecule information
     b) Hoomd/lammps do not have molecule information
     c) If given heuristic information then start grouping together atoms 
-        independent of molecular topology 
-    d) Should return some sort of list that relates coarse grain beads 
-        to global atomic indices (regardless of heuristic or mapping file)
+        solely based on the fine-grained bonding patterns
+    d) Create a cg hierarchy cg-system -> molecules -> cg-beads -> atom_indices
 3) Do converting
-    a) Molecule by molecule, convert the corresponding atoms to beads
+    a) Iterate through the cg hierarchy, filling in the cg-system with particles
 4) Create bonds
     a) If given mapping information, then bonding patterns will already be 
         specified
@@ -30,7 +29,7 @@ from collections import OrderedDict
 """
 
 def coarse_grain(fine_grained, heuristic=None, mapping_files=[], 
-        table_of_contents=None):
+        table_of_contents=None, dump_toc=True):
     """ Coarse grain an mb.Compound
 
     Parameters
@@ -41,6 +40,8 @@ def coarse_grain(fine_grained, heuristic=None, mapping_files=[],
         General mapping scheme i.e. '3:1'
     mapping_files : list of .json files
         json file specify residue names, mappings, and bonds
+    dump_toc : bool
+        Dump out table of contents to table_of_contents.json
 
      Molecular conversions should be a dictionary whose keys are cg beads
      and indices correspond to the global atom indices
@@ -48,7 +49,7 @@ def coarse_grain(fine_grained, heuristic=None, mapping_files=[],
     """
     # Heuristic denotes something like general 3:1 heavy atom mapping
     if heuristic:
-        molecular_conversions, cg_bonds = _apply_heuristic(fine_grained, heuristic)
+        cg_system, cg_bonds, cg_hierarchy = _apply_heuristic(fine_grained, heuristic)
 
     # Mapping files denote a list of json files to create a large dictionary
     elif mapping_files:
@@ -64,6 +65,8 @@ def coarse_grain(fine_grained, heuristic=None, mapping_files=[],
         if not table_of_contents:
             print("Generating table of contents")
             table_of_contents = _extract_molecules(fine_grained, mapping_template)
+            json.dump(table_of_contents, open('table_of_contents.json','w'), 
+                    indent=4,separators=(',', ': '),ensure_ascii=False)
         else:
             print("Loading table of contents <{table_of_contents}>".format(**locals()))
             table_of_contents = json.load(open(table_of_contents,'r'))
@@ -73,6 +76,7 @@ def coarse_grain(fine_grained, heuristic=None, mapping_files=[],
         # Create cg_system container for molecules and related beads
         # Identify bonds in the cg_system
         # Create the cg_hierarchy
+        print("Generating hierarchy")
         cg_system, cg_bonds, cg_hierarchy = _create_cg_outline(table_of_contents, 
                 mapping_template)
     else:
@@ -81,9 +85,11 @@ def coarse_grain(fine_grained, heuristic=None, mapping_files=[],
 
     # Calculate centers of masses of groups of atoms to add particles
     # to cg_system
+    print("Filling compound with particlces")
     cg_system = _fill_cg_outline(fine_grained, cg_system, cg_hierarchy)
 
     # Apply bonding
+    print("Applying bonds")
     cg_system = _apply_bonding(cg_system, cg_bonds)
     return cg_system
 
@@ -160,7 +166,7 @@ def _create_cg_outline(table_of_contents, mapping_template):
 
         cg_molecule = mb.Compound(name=molecule_name)
         cg_system.add(cg_molecule)
-        cg_hierarchy.update({cg_molecule:{}})
+        cg_hierarchy.update(OrderedDict({cg_molecule:OrderedDict()}))
 
         global_atom_indices = table_of_contents[molecule]
 
@@ -202,7 +208,7 @@ def _extract_molecules(fine_grained, mapping_template):
     residues = [item for item in mapping_template.keys()]
     table_of_contents = OrderedDict()
     if has_res_information:
-        traj = mdtraj.load('testing/two_propane.gro')
+        traj = mdtraj.load('testing/bulk_DSPC_900K.gro')
         for residue in traj.topology.residues:
             indices = [at.index for at in residue.atoms]
             table_of_contents.update({residue.name + "-" + str(residue.index): indices})
@@ -213,11 +219,12 @@ def _extract_molecules(fine_grained, mapping_template):
 def _apply_heuristic(fine_grained, heuristic):
     """ Apply a heuristic to outline the molecular conversions
     i.e. 3:1 means this method will group 3 heavy atoms to 1 CG bead"""
+    # Identify groups of atoms according to heuristic
     return None
 
 def _compute_center_of_mass(fine_grained, atom_indices):
     """ Compute center of mass"""
-    masses = [Mass[fine_grained.children[index].name] for index in atom_indices]
+    masses = [Mass[fine_grained.children[index].name[0:1]] for index in atom_indices]
     total_mass = sum(masses)
     com = np.ndarray(3)
     for i in range(3):
@@ -228,11 +235,11 @@ def _compute_center_of_mass(fine_grained, atom_indices):
 
 
 if __name__ == "__main__":
-    fine_grained = mb.load('testing/two_propane.gro')
-    fine_grained.name="PR3"
-    toc = "testing/two_propane_toc.json"
+    fine_grained = mb.load('testing/bulk_DSPC_900K.gro')
+    fine_grained.name="DSPC"
+    toc = None
 
-    coarse_grained = coarse_grain(fine_grained, mapping_files=["testing/propane.json"], table_of_contents=toc)
+    coarse_grained = coarse_grain(fine_grained, mapping_files=["testing/DSPC.json"], table_of_contents=toc)
 
     # Save
     coarse_grained.save('cg.top',overwrite=True)
