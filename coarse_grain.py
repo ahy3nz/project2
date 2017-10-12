@@ -73,9 +73,6 @@ def forward_map(fine_grained, heuristic=None, mapping_files=[],
     dump_toc : bool
         Dump out table of contents to table_of_contents.json
 
-     Molecular conversions should be a dictionary whose keys are cg beads
-     and indices correspond to the global atom indices
-     Table of contents matches molecules to global atom indices
     """
     # Heuristic denotes something like general 3:1 heavy atom mapping
     if heuristic:
@@ -168,7 +165,7 @@ def _fill_cg_outline(fine_grained, cg_system, cg_hierarchy):
     
 
 def _create_cg_outline(table_of_contents, mapping_template):
-    """ Read mapping.json files to outline molecular conversions
+    """ Read mapping.json files to outline conversions
 
     table_of_contents : dict
         {resname-resindex : [global_atom_indices]}
@@ -179,7 +176,7 @@ def _create_cg_outline(table_of_contents, mapping_template):
     -------
     cg_system : mb.compound
         At this stage, no particles/beads added, but hierarachy established
-    cg_bonds : list of tuples (2, n_beads)
+    cg_bonds : list of tuples (2, n_bonds)
         A list of 2-tuples that specifies bonded beads
     cg_hierarchy : OrderedDict()
         {mb.Compound molecule : {str bead : [global atom indices]}}
@@ -223,19 +220,29 @@ def _create_cg_outline(table_of_contents, mapping_template):
 
 
 def _extract_molecules(fine_grained, mapping_template):
-    """ From the structure file,
+    """ Return a dictionary mapping resname-resindex to global indices
+    
+    Parameters
+    ---------
+    mapping_template : OrderedDict()
+        mapping template from json
+    From the structure file,
     be able to determine what molecule or residue each atom belongs to
     This should be easy with gro files,
     With hoomd/lammps files, there are no molecules/residues so this 
     has to be provided or somehow inferred
 
     Currently this is being implemented as a dict
+    Notes
+    -----
+    This can generate a table of contents for both cg and aa compounds,
+    depending on what is the structure provided
     """
     has_res_information = True
     residues = [item for item in mapping_template.keys()]
     table_of_contents = OrderedDict()
     if has_res_information:
-        traj = mdtraj.load('testing/bulk_DSPC_900K.gro')
+        traj = mdtraj.load('testing/two_propane.gro')
         for residue in traj.topology.residues:
             indices = [at.index for at in residue.atoms]
             table_of_contents.update({residue.name + "-" + str(residue.index): indices})
@@ -259,13 +266,128 @@ def _compute_center_of_mass(fine_grained, atom_indices):
             for index,mass in zip(atom_indices,masses)])
     return com 
 
+def reverse_map(coarse_grained, heuristic=None, mapping_files=[], 
+        table_of_contents=None, dump_toc=True):
+    """ Reverse map an mb.Compound
+
+    Parameters
+    ---------
+    fine_grained : mb.Compound
+        original structure
+    heuristic : str
+        General mapping scheme i.e. '3:1'
+    mapping_files : list of .json files
+        json file specify residue names, mappings, and bonds
+    dump_toc : bool
+        Dump out table of contents to table_of_contents.json
+
+    """
+
+    if mapping_files:
+
+        # Load in the mapping files into mapping_template
+        mapping_template = {}
+        for json_file in mapping_files:
+            print("Loading json mapping <{}>".format(json_file))
+            mapping_template.update(json.load(open(json_file,'r'), 
+                object_pairs_hook=OrderedDict))
+
+        # Create a table of contents to match molecules to global atom indices
+        if not table_of_contents:
+            print("Generating table of contents")
+            table_of_contents = _extract_molecules(fine_grained, mapping_template)
+            json.dump(table_of_contents, open('table_of_contents.json','w'), 
+                    indent=4,separators=(',', ': '),ensure_ascii=False)
+        else:
+            print("Loading table of contents <{table_of_contents}>".format(**locals()))
+            table_of_contents = json.load(open(table_of_contents,'r'))
+
+        print("Generating hierarchy")
+        aa_system, aa_bonds, aa_hierarchy = _create_aa_outline(coarse_grained, 
+                table_of_contents, mapping_template)
+
+    else: 
+        print("Not enough reverse-mapping parameters specified, returning original compound")
+        return coarse_grained
+
+def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
+    """ Read mapping.json files to outline conversions
+
+    table_of_contents : dict
+        {resname-resindex : [global_bead_indices]}
+    mapping_template : dict
+        loaded-in json file
+
+    Returns
+    -------
+    aa_system : mb.compound
+        At this stage, no particles/beads added, but hierarachy established
+    aa_bonds : list of tuples (2, n_bonds)
+        A list of 2-tuples that specifies bonded atoms
+    aa_hierarchy : OrderedDict()
+        {mb.Compound molecule : {str bead : [global atom indices]}}
+        {mb.Compound molecule : [mb.Compound atom]}}
+
+    """
+    aa_bonds = []
+    aa_system = mb.Compound()
+    aa_hierarchy = OrderedDict()
+    atom_counter = 0
+    for molecule in table_of_contents.keys():
+        molecule_name = molecule.split("-")[0]
+
+        aa_molecule = mb.Compound(name=molecule_name)
+        aa_system.add(aa_molecule)
+        aa_hierarchy.update(OrderedDict({aa_molecule:OrderedDict()}))
+
+        global_bead_indices = table_of_contents[molecule]
+
+        # Update bonding for global atom indices
+        # Take the mapping's local aa bonding
+        # And shift appropriately by the global atom indices
+        # Which is just the number of atoms we've added
+        # before anything in thie new molecule
+        for atom_i, atom_j in mapping_template[molecule_name]['aa_bond']:
+            aa_bonds.append([atom_i + atom_counter, atom_j + atom_counter])
+
+        local_atom_list = [""]*int(mapping_template[molecule_name]['n_atoms'])
+
+        # For each bead in the molecule's mapping
+        # Create a local atom list corresponding to all the atoms
+        # in that molecule
+        # Be careful about bookkeeping because the the atom order
+        # doesn't follow the bead order perfectly
+        # Add the local atom list to the aa system
+        # aa hierarchy stil keeps molecules -> beads -> atoms organized
+        # aa system is molecules -> atoms
+        for bead in mapping_template[molecule_name]['rev_map'].keys():
+            updated_bead_index = bead.split("-")[0] + global_bead_indices[0]
+            cg_bead = mb.Compound(name=bead, 
+                    pos=coarse_grain.children[updated_bead_index].pos)
+            aa_hierarchy[cg_molecule].update(OrderedDict({cg_bead:[]}))
+            for atom in mapping_template[molecule_name]['rev_map'][bead]:
+                atom_name, local_index = atom.split("-")
+                local_atom = mb.Compound(name=atom_name, 
+                        pos=coarse_grain.children[updated_bead_index].pos)
+                local_atom_list[int(local_index)] = local_atom
+
+                aa_hierarchy[cg_molecule][cg_bead].append(local_atom)
+                atom_counter+=1
+            bead_counter+=1
+
+
+        for atom in local_atom_list:
+            aa_molecule.add(local_atom)
+        return aa_system, aa_bonds, aa_hierarchy
+
 
 
 if __name__ == "__main__":
     fine_grained = mb.load('testing/two_propane.gro')
     mapping_files =['testing/propane.json']
     fine_grained.name = ""
-    toc = 'testing/two_propane_toc.json'
+    #toc = 'testing/two_propane_toc.json'
+    toc = None
 
     coarse_grained = forward_map(fine_grained, mapping_files=mapping_files, table_of_contents=toc)
 
@@ -276,4 +398,8 @@ if __name__ == "__main__":
 
 
     ## here comes the reversemapping
-    recovered = reverse_map(
+    #toc = None
+    toc = 'cg_toc.json'
+    recovered = reverse_map(coarse_grained, mapping_files=mapping_files, table_of_contents=toc)
+
+
