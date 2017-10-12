@@ -169,11 +169,46 @@ def reverse_map(coarse_grained, heuristic=None, mapping_files=[],
     # AA system and AA hierarchy have atoms in it
     # But need to place them around the cg bead center
     print("Inflating system with atoms")
-    #aa_system = _restore_atoms(coarse_grained, aa_system, aa_hierarchy)
+    aa_system = _restore_atoms(coarse_grained, aa_system, aa_hierarchy)
 
     # Apply bonding
     print("Applying bonds")
     aa_system = _apply_bonding(aa_system, aa_bonds)
+    return aa_system
+
+def _restore_atoms(coarse_grained, aa_system, aa_hierarchy):
+    """ Optimize aa coordinates
+
+    Parameters
+    ----------
+    coarse_grained : mb.Compound
+        CG structure
+    aa_system : mb.Compound
+        AA structure with unoptimized coordinates
+    aa_hierarchy : OrderedDict()
+        {mb.Compound molecule : {mb.Compound bead : [mb.Compound atom ]}}
+
+
+    Returns
+    -------
+    aa_system : mb.Compound
+        AA structure with optimized coordinates
+
+    Notes
+    -----
+    Generates a sphere of points around each bead
+
+        """
+    for molecule in aa_hierarchy.keys():
+        for bead in aa_hierarchy[molecule]:
+            spherical_pattern = mb.SpherePattern(
+                    n=len(aa_hierarchy[molecule][bead])+1,scale=0.1)
+            sphere = spherical_pattern.apply(bead) 
+            for index, atom in enumerate(aa_hierarchy[molecule][bead]):
+                atom.translate(sphere[index].pos)
+
+
+
     return aa_system
 
 def _extract_molecules(fine_grained, mapping_template):
@@ -253,8 +288,8 @@ def _create_cg_outline(table_of_contents, mapping_template):
         # And shift them appropriately by the global atom indices
         # Which is just adding the global atom index of the first
         # atom in the new molecule
-        for bead in mapping_template[molecule_name]['fwd_map'].keys():
-            updated_atom_indices = [local_index + global_atom_indices[0] for local_index in mapping_template[molecule_name]['fwd_map'][bead]]
+        for bead in mapping_template[molecule_name]['map'].keys():
+            updated_atom_indices = [int(local_index.split('-')[1]) + global_atom_indices[0] for local_index in mapping_template[molecule_name]['map'][bead]]
             cg_hierarchy[cg_molecule].update({bead: updated_atom_indices})
             bead_counter+=1
 
@@ -290,7 +325,6 @@ def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
         molecule_name = molecule.split("-")[0]
 
         aa_molecule = mb.Compound(name=molecule_name)
-        print("Adding :{}".format(aa_molecule))
         aa_system.add(aa_molecule)
         aa_hierarchy.update(OrderedDict({aa_molecule:OrderedDict()}))
 
@@ -314,12 +348,12 @@ def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
         # Add the local atom list to the aa system
         # aa hierarchy stil keeps molecules -> beads -> atoms organized
         # aa system is molecules -> atoms
-        for bead in mapping_template[molecule_name]['rev_map'].keys():
+        for bead in mapping_template[molecule_name]['map'].keys():
             updated_bead_index = int(bead.split("-")[1]) + int(global_bead_indices[0])
             cg_bead = mb.Compound(name=bead, 
                     pos=particles[updated_bead_index].pos)
             aa_hierarchy[aa_molecule].update(OrderedDict({cg_bead:[]}))
-            for atom in mapping_template[molecule_name]['rev_map'][bead]:
+            for atom in mapping_template[molecule_name]['map'][bead]:
                 atom_name, local_index = atom.split("-")
                 local_atom = mb.Compound(name=atom_name, 
                         pos=particles[updated_bead_index].pos)
@@ -396,21 +430,24 @@ if __name__ == "__main__":
     fine_grained = mb.load('testing/two_propane.gro')
     mapping_files =['testing/propane.json']
     fine_grained.name = ""
-    #toc = 'testing/two_propane_toc.json'
-    toc = None
+    residues=['PR3']
+    toc = 'testing/two_propane_aa_toc.json'
+    #toc = None
 
     coarse_grained = forward_map(fine_grained, mapping_files=mapping_files, table_of_contents=toc)
 
     # Save
     coarse_grained.save('fwd_map.top',overwrite=True)
-    coarse_grained.save('fwd_map.gro',overwrite=True, residues=['PR3'])
-    coarse_grained.save('fwd_map.mol2',overwrite=True, residues=['PR3'])
+    coarse_grained.save('fwd_map.gro',overwrite=True, residues=residues)
+    coarse_grained.save('fwd_map.mol2',overwrite=True, residues=residues)
 
 
     ## here comes the reversemapping
     #toc = None
-    toc = 'cg_toc.json'
+    #toc = 'cg_toc.json'
+    toc = 'testing/two_propane_cg_toc.json'
     recovered = reverse_map(coarse_grained, mapping_files=mapping_files, table_of_contents=toc)
-    recovered.save('rev_map.gro',overwrite=True, residues=['PR3'])
+    recovered.save('rev_map.gro',overwrite=True, residues=residues)
+    recovered.save('rev_map.mol2',overwrite=True, residues=residues)
 
 
