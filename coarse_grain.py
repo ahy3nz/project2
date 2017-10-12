@@ -17,6 +17,9 @@ from collections import OrderedDict
     a) Generate table of contents from structure file
         i) Gromacs is easy, already has molecule/residue info
         ii) Hoomd/lammps do not have molecule/residue info
+        ?Parmed?
+        *Get molecules based on bonding networks
+        *Bead mbuild classes with atom children
     b) Supply a table of contents file
         i) This is json file mapping- 
             str(residuename-residueindex) : [global_atom_indices]
@@ -176,41 +179,6 @@ def reverse_map(coarse_grained, heuristic=None, mapping_files=[],
     aa_system = _apply_bonding(aa_system, aa_bonds)
     return aa_system
 
-def _restore_atoms(coarse_grained, aa_system, aa_hierarchy):
-    """ Optimize aa coordinates
-
-    Parameters
-    ----------
-    coarse_grained : mb.Compound
-        CG structure
-    aa_system : mb.Compound
-        AA structure with unoptimized coordinates
-    aa_hierarchy : OrderedDict()
-        {mb.Compound molecule : {mb.Compound bead : [mb.Compound atom ]}}
-
-
-    Returns
-    -------
-    aa_system : mb.Compound
-        AA structure with optimized coordinates
-
-    Notes
-    -----
-    Generates a sphere of points around each bead
-
-        """
-    for molecule in aa_hierarchy.keys():
-        for bead in aa_hierarchy[molecule]:
-            spherical_pattern = mb.SpherePattern(
-                    n=len(aa_hierarchy[molecule][bead])+1,scale=0.1)
-            sphere = spherical_pattern.apply(bead) 
-            for index, atom in enumerate(aa_hierarchy[molecule][bead]):
-                atom.translate(sphere[index].pos)
-
-
-
-    return aa_system
-
 def _extract_molecules(fine_grained, mapping_template):
     """ Return a dictionary mapping resname-resindex to global indices
     
@@ -270,7 +238,8 @@ def _create_cg_outline(table_of_contents, mapping_template):
 
         cg_molecule = mb.Compound(name=molecule_name)
         cg_system.add(cg_molecule)
-        cg_hierarchy.update(OrderedDict({cg_molecule:OrderedDict()}))
+        #cg_hierarchy.update(OrderedDict({cg_molecule:OrderedDict()}))
+        cg_hierarchy.update([ (cg_molecule, OrderedDict()) ])
 
         global_atom_indices = table_of_contents[molecule]
 
@@ -290,7 +259,8 @@ def _create_cg_outline(table_of_contents, mapping_template):
         # atom in the new molecule
         for bead in mapping_template[molecule_name]['map'].keys():
             updated_atom_indices = [int(local_index.split('-')[1]) + global_atom_indices[0] for local_index in mapping_template[molecule_name]['map'][bead]]
-            cg_hierarchy[cg_molecule].update({bead: updated_atom_indices})
+            #cg_hierarchy[cg_molecule].update({bead: updated_atom_indices})
+            cg_hierarchy[cg_molecule].update([ (bead, updated_atom_indices) ])
             bead_counter+=1
 
     return cg_system, cg_bonds, cg_hierarchy
@@ -326,9 +296,11 @@ def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
 
         aa_molecule = mb.Compound(name=molecule_name)
         aa_system.add(aa_molecule)
-        aa_hierarchy.update(OrderedDict({aa_molecule:OrderedDict()}))
+        #aa_hierarchy.update(OrderedDict({aa_molecule:OrderedDict()}))
+        aa_hierarchy.update([ (aa_molecule, OrderedDict()) ])
 
         global_bead_indices = table_of_contents[molecule]
+        local_atom_list = [""]*int(mapping_template[molecule_name]['n_atoms'])
 
         # Update bonding for global atom indices
         # Take the mapping's local aa bonding
@@ -338,7 +310,6 @@ def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
         for atom_i, atom_j in mapping_template[molecule_name]['aa_bond']:
             aa_bonds.append([atom_i + atom_counter, atom_j + atom_counter])
 
-        local_atom_list = [""]*int(mapping_template[molecule_name]['n_atoms'])
 
         # For each bead in the molecule's mapping
         # Create a local atom list corresponding to all the atoms
@@ -352,7 +323,8 @@ def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
             updated_bead_index = int(bead.split("-")[1]) + int(global_bead_indices[0])
             cg_bead = mb.Compound(name=bead, 
                     pos=particles[updated_bead_index].pos)
-            aa_hierarchy[aa_molecule].update(OrderedDict({cg_bead:[]}))
+            #aa_hierarchy[aa_molecule].update(OrderedDict({cg_bead:[]}))
+            aa_hierarchy[aa_molecule].update([ (cg_bead, []) ])
             for atom in mapping_template[molecule_name]['map'][bead]:
                 atom_name, local_index = atom.split("-")
                 local_atom = mb.Compound(name=atom_name, 
@@ -388,6 +360,43 @@ def _fill_cg_outline(fine_grained, cg_system, cg_hierarchy):
             cg_molecule.add(new_bead)
 
     return cg_system
+
+def _restore_atoms(coarse_grained, aa_system, aa_hierarchy):
+    """ Optimize aa coordinates
+
+    Parameters
+    ----------
+    coarse_grained : mb.Compound
+        CG structure
+    aa_system : mb.Compound
+        AA structure with unoptimized coordinates
+    aa_hierarchy : OrderedDict()
+        {mb.Compound molecule : {mb.Compound bead : [mb.Compound atom ]}}
+
+
+    Returns
+    -------
+    aa_system : mb.Compound
+        AA structure with optimized coordinates
+
+    Notes
+    -----
+    Generates a sphere of points around each bead
+
+        """
+    for molecule in aa_hierarchy.keys():
+        for bead in aa_hierarchy[molecule]:
+            spherical_pattern = mb.SpherePattern(
+                    n=len(aa_hierarchy[molecule][bead])+1,scale=0.1)
+            sphere = spherical_pattern.apply(bead) 
+            for index, atom in enumerate(aa_hierarchy[molecule][bead]):
+                atom.translate(sphere[index].pos)
+
+
+
+    return aa_system
+
+
 
 
 def _apply_bonding(coarse_grained, cg_bonds):
