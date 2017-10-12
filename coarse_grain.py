@@ -120,151 +120,6 @@ def forward_map(fine_grained, heuristic=None, mapping_files=[],
     cg_system = _apply_bonding(cg_system, cg_bonds)
     return cg_system
 
-    
-def _apply_bonding(coarse_grained, cg_bonds):
-    """ Apply bonds between CG beads
-
-    Parameters
-    ---------
-    coarse_grained : mb.Compound
-    cg_bonds : list of tuples (2, n_beads)
-
-    Returns
-    -------
-    cg_bonded : mb.Compound
-    """
-    particles = [p for p in coarse_grained.particles()]
-    for bead_i, bead_j in cg_bonds:
-        coarse_grained.add_bond([particles[bead_i], 
-                                particles[bead_j]])
-    return coarse_grained
-
-def _fill_cg_outline(fine_grained, cg_system, cg_hierarchy):
-    """ Add particles to cg system
-
-    Parameters
-    ----------
-    fine_grained : mb.Compound
-        original structure
-    cg_system : mb.compound
-        At this stage, no particles/beads added, but hierarachy established
-    cg_hierarchy : OrderedDict()
-        {molecule : {bead : [global atom indices]}}
-    """
-    
-    for cg_molecule in cg_hierarchy.keys():
-        for bead in cg_hierarchy[cg_molecule]:
-            new_bead = mb.Compound(name=bead.split("-")[0], 
-                    pos=_compute_center_of_mass(fine_grained, cg_hierarchy[cg_molecule][bead]))
-            cg_molecule.add(new_bead)
-        #cg_system.add(cg_molecule)
-
-    return cg_system
-
-
-    
-
-def _create_cg_outline(table_of_contents, mapping_template):
-    """ Read mapping.json files to outline conversions
-
-    table_of_contents : dict
-        {resname-resindex : [global_atom_indices]}
-    mapping_template : dict
-        loaded-in json file
-
-    Returns
-    -------
-    cg_system : mb.compound
-        At this stage, no particles/beads added, but hierarachy established
-    cg_bonds : list of tuples (2, n_bonds)
-        A list of 2-tuples that specifies bonded beads
-    cg_hierarchy : OrderedDict()
-        {mb.Compound molecule : {str bead : [global atom indices]}}
-
-    """
-    cg_bonds = []
-    cg_system= mb.Compound()
-    cg_hierarchy = OrderedDict()
-
-    # Iterate molecule by molecule
-    bead_counter = 0
-    for molecule in table_of_contents.keys():
-        molecule_name = molecule.split("-")[0]
-
-        cg_molecule = mb.Compound(name=molecule_name)
-        cg_system.add(cg_molecule)
-        cg_hierarchy.update(OrderedDict({cg_molecule:OrderedDict()}))
-
-        global_atom_indices = table_of_contents[molecule]
-
-
-        # Update bonding for global BEAD indices
-        # Take the mapping's local bonding
-        # And shift appropriately by the global bead indices
-        # Which is just the number of beads we've added 
-        # before anything in this new molecule
-        for bead_i, bead_j in mapping_template[molecule_name]['cg_bond']:
-            cg_bonds.append([bead_i + bead_counter, 
-                        bead_j + bead_counter])
-
-        # Take the mapping's local atom indices
-        # And shift them appropriately by the global atom indices
-        # Which is just adding the global atom index of the first
-        # atom in the new molecule
-        for bead in mapping_template[molecule_name]['fwd_map'].keys():
-            updated_atom_indices = [local_index + global_atom_indices[0] for local_index in mapping_template[molecule_name]['fwd_map'][bead]]
-            cg_hierarchy[cg_molecule].update({bead: updated_atom_indices})
-            bead_counter+=1
-
-    return cg_system, cg_bonds, cg_hierarchy
-
-
-def _extract_molecules(fine_grained, mapping_template):
-    """ Return a dictionary mapping resname-resindex to global indices
-    
-    Parameters
-    ---------
-    mapping_template : OrderedDict()
-        mapping template from json
-    From the structure file,
-    be able to determine what molecule or residue each atom belongs to
-    This should be easy with gro files,
-    With hoomd/lammps files, there are no molecules/residues so this 
-    has to be provided or somehow inferred
-
-    Currently this is being implemented as a dict
-    Notes
-    -----
-    This can generate a table of contents for both cg and aa compounds,
-    depending on what is the structure provided
-    """
-    has_res_information = True
-    residues = [item for item in mapping_template.keys()]
-    table_of_contents = OrderedDict()
-    if has_res_information:
-        traj = mdtraj.load('testing/two_propane.gro')
-        for residue in traj.topology.residues:
-            indices = [at.index for at in residue.atoms]
-            table_of_contents.update({residue.name + "-" + str(residue.index): indices})
-
-    return table_of_contents
-
-
-def _apply_heuristic(fine_grained, heuristic):
-    """ Apply a heuristic to outline the molecular conversions
-    i.e. 3:1 means this method will group 3 heavy atoms to 1 CG bead"""
-    # Identify groups of atoms according to heuristic
-    return None
-
-def _compute_center_of_mass(fine_grained, atom_indices):
-    """ Compute center of mass"""
-    masses = [Mass[fine_grained.children[index].name[0:1]] for index in atom_indices]
-    total_mass = sum(masses)
-    com = np.ndarray(3)
-    for i in range(3):
-        com[i] = sum([fine_grained.children[index].pos[i]*mass/total_mass 
-            for index,mass in zip(atom_indices,masses)])
-    return com 
 
 def reverse_map(coarse_grained, heuristic=None, mapping_files=[], 
         table_of_contents=None, dump_toc=True):
@@ -321,6 +176,89 @@ def reverse_map(coarse_grained, heuristic=None, mapping_files=[],
     aa_system = _apply_bonding(aa_system, aa_bonds)
     return aa_system
 
+def _extract_molecules(fine_grained, mapping_template):
+    """ Return a dictionary mapping resname-resindex to global indices
+    
+    Parameters
+    ---------
+    mapping_template : OrderedDict()
+        mapping template from json
+    From the structure file,
+    be able to determine what molecule or residue each atom belongs to
+    This should be easy with gro files,
+    With hoomd/lammps files, there are no molecules/residues so this 
+    has to be provided or somehow inferred
+
+    Currently this is being implemented as a dict
+    Notes
+    -----
+    This can generate a table of contents for both cg and aa compounds,
+    depending on what is the structure provided
+    """
+    has_res_information = True
+    residues = [item for item in mapping_template.keys()]
+    table_of_contents = OrderedDict()
+    if has_res_information:
+        traj = mdtraj.load('testing/two_propane.gro')
+        for residue in traj.topology.residues:
+            indices = [at.index for at in residue.atoms]
+            table_of_contents.update({residue.name + "-" + str(residue.index): indices})
+
+    return table_of_contents
+
+def _create_cg_outline(table_of_contents, mapping_template):
+    """ Read mapping.json files to outline conversions
+
+    table_of_contents : dict
+        {resname-resindex : [global_atom_indices]}
+    mapping_template : dict
+        loaded-in json file
+
+    Returns
+    -------
+    cg_system : mb.compound
+        At this stage, no particles/beads added, but hierarachy established
+    cg_bonds : list of tuples (2, n_bonds)
+        A list of 2-tuples that specifies bonded beads
+    cg_hierarchy : OrderedDict()
+        {mb.Compound molecule : {str bead : [global atom indices]}}
+
+    """
+    cg_bonds = []
+    cg_system= mb.Compound()
+    cg_hierarchy = OrderedDict()
+
+    # Iterate molecule by molecule
+    bead_counter = 0
+    for molecule in table_of_contents.keys():
+        molecule_name = molecule.split("-")[0]
+
+        cg_molecule = mb.Compound(name=molecule_name)
+        cg_system.add(cg_molecule)
+        cg_hierarchy.update(OrderedDict({cg_molecule:OrderedDict()}))
+
+        global_atom_indices = table_of_contents[molecule]
+
+
+        # Update bonding for global BEAD indices
+        # Take the mapping's local bonding
+        # And shift appropriately by the global bead indices
+        # Which is just the number of beads we've added 
+        # before anything in this new molecule
+        for bead_i, bead_j in mapping_template[molecule_name]['cg_bond']:
+            cg_bonds.append([bead_i + bead_counter, 
+                        bead_j + bead_counter])
+
+        # Take the mapping's local atom indices
+        # And shift them appropriately by the global atom indices
+        # Which is just adding the global atom index of the first
+        # atom in the new molecule
+        for bead in mapping_template[molecule_name]['fwd_map'].keys():
+            updated_atom_indices = [local_index + global_atom_indices[0] for local_index in mapping_template[molecule_name]['fwd_map'][bead]]
+            cg_hierarchy[cg_molecule].update({bead: updated_atom_indices})
+            bead_counter+=1
+
+    return cg_system, cg_bonds, cg_hierarchy
 
 def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
     """ Read mapping.json files to outline conversions
@@ -396,6 +334,62 @@ def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
             aa_molecule.add(atom)
     return aa_system, aa_bonds, aa_hierarchy
 
+def _fill_cg_outline(fine_grained, cg_system, cg_hierarchy):
+    """ Add particles to cg system
+
+    Parameters
+    ----------
+    fine_grained : mb.Compound
+        original structure
+    cg_system : mb.compound
+        At this stage, no particles/beads added, but hierarachy established
+    cg_hierarchy : OrderedDict()
+        {molecule : {bead : [global atom indices]}}
+    """
+    
+    for cg_molecule in cg_hierarchy.keys():
+        for bead in cg_hierarchy[cg_molecule]:
+            new_bead = mb.Compound(name=bead.split("-")[0], 
+                    pos=_compute_center_of_mass(fine_grained, cg_hierarchy[cg_molecule][bead]))
+            cg_molecule.add(new_bead)
+
+    return cg_system
+
+
+def _apply_bonding(coarse_grained, cg_bonds):
+    """ Apply bonds between CG beads
+
+    Parameters
+    ---------
+    coarse_grained : mb.Compound
+    cg_bonds : list of tuples (2, n_beads)
+
+    Returns
+    -------
+    cg_bonded : mb.Compound
+    """
+    particles = [p for p in coarse_grained.particles()]
+    for bead_i, bead_j in cg_bonds:
+        coarse_grained.add_bond([particles[bead_i], 
+                                particles[bead_j]])
+    return coarse_grained
+
+
+def _apply_heuristic(fine_grained, heuristic):
+    """ Apply a heuristic to outline the molecular conversions
+    i.e. 3:1 means this method will group 3 heavy atoms to 1 CG bead"""
+    # Identify groups of atoms according to heuristic
+    return None
+
+def _compute_center_of_mass(fine_grained, atom_indices):
+    """ Compute center of mass"""
+    masses = [Mass[fine_grained.children[index].name[0:1]] for index in atom_indices]
+    total_mass = sum(masses)
+    com = np.ndarray(3)
+    for i in range(3):
+        com[i] = sum([fine_grained.children[index].pos[i]*mass/total_mass 
+            for index,mass in zip(atom_indices,masses)])
+    return com 
 
 
 if __name__ == "__main__":
