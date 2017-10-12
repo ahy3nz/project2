@@ -310,6 +310,17 @@ def reverse_map(coarse_grained, heuristic=None, mapping_files=[],
         print("Not enough reverse-mapping parameters specified, returning original compound")
         return coarse_grained
 
+    # AA system and AA hierarchy have atoms in it
+    # But need to place them around the cg bead center
+    print("Inflating system with atoms")
+    aa_system = _restore_atoms(coarse_grained, aa_system, aa_hierarchy)
+
+    # Apply bonding
+    print("Applying bonds")
+    aa_system = _apply_bonding(aa_system, aa_bonds)
+    return aa_system
+
+
 def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
     """ Read mapping.json files to outline conversions
 
@@ -321,12 +332,13 @@ def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
     Returns
     -------
     aa_system : mb.compound
-        At this stage, no particles/beads added, but hierarachy established
+        Hierarchy established, positions still unset
+        mb.Compound molecule > mb.Compound atom
+
     aa_bonds : list of tuples (2, n_bonds)
         A list of 2-tuples that specifies bonded atoms
     aa_hierarchy : OrderedDict()
-        {mb.Compound molecule : {str bead : [global atom indices]}}
-        {mb.Compound molecule : [mb.Compound atom]}}
+        {mb.Compound molecule : {mb.Compound bead : [mb.Compound atom ]}}
 
     """
     aa_bonds = []
