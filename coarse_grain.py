@@ -286,7 +286,7 @@ def reverse_map(coarse_grained, heuristic=None, mapping_files=[],
     if mapping_files:
 
         # Load in the mapping files into mapping_template
-        mapping_template = {}
+        mapping_template = OrderedDict()
         for json_file in mapping_files:
             print("Loading json mapping <{}>".format(json_file))
             mapping_template.update(json.load(open(json_file,'r'), 
@@ -300,7 +300,8 @@ def reverse_map(coarse_grained, heuristic=None, mapping_files=[],
                     indent=4,separators=(',', ': '),ensure_ascii=False)
         else:
             print("Loading table of contents <{table_of_contents}>".format(**locals()))
-            table_of_contents = json.load(open(table_of_contents,'r'))
+            table_of_contents = json.load(open(table_of_contents,'r'),
+                    object_pairs_hook=OrderedDict)
 
         print("Generating hierarchy")
         aa_system, aa_bonds, aa_hierarchy = _create_aa_outline(coarse_grained, 
@@ -313,7 +314,7 @@ def reverse_map(coarse_grained, heuristic=None, mapping_files=[],
     # AA system and AA hierarchy have atoms in it
     # But need to place them around the cg bead center
     print("Inflating system with atoms")
-    aa_system = _restore_atoms(coarse_grained, aa_system, aa_hierarchy)
+    #aa_system = _restore_atoms(coarse_grained, aa_system, aa_hierarchy)
 
     # Apply bonding
     print("Applying bonds")
@@ -345,10 +346,13 @@ def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
     aa_system = mb.Compound()
     aa_hierarchy = OrderedDict()
     atom_counter = 0
+    bead_counter = 0
+    particles = [p for p in coarse_grained.particles()]
     for molecule in table_of_contents.keys():
         molecule_name = molecule.split("-")[0]
 
         aa_molecule = mb.Compound(name=molecule_name)
+        print("Adding :{}".format(aa_molecule))
         aa_system.add(aa_molecule)
         aa_hierarchy.update(OrderedDict({aa_molecule:OrderedDict()}))
 
@@ -373,24 +377,24 @@ def _create_aa_outline(coarse_grained, table_of_contents, mapping_template):
         # aa hierarchy stil keeps molecules -> beads -> atoms organized
         # aa system is molecules -> atoms
         for bead in mapping_template[molecule_name]['rev_map'].keys():
-            updated_bead_index = bead.split("-")[0] + global_bead_indices[0]
+            updated_bead_index = int(bead.split("-")[1]) + int(global_bead_indices[0])
             cg_bead = mb.Compound(name=bead, 
-                    pos=coarse_grain.children[updated_bead_index].pos)
-            aa_hierarchy[cg_molecule].update(OrderedDict({cg_bead:[]}))
+                    pos=particles[updated_bead_index].pos)
+            aa_hierarchy[aa_molecule].update(OrderedDict({cg_bead:[]}))
             for atom in mapping_template[molecule_name]['rev_map'][bead]:
                 atom_name, local_index = atom.split("-")
                 local_atom = mb.Compound(name=atom_name, 
-                        pos=coarse_grain.children[updated_bead_index].pos)
+                        pos=particles[updated_bead_index].pos)
                 local_atom_list[int(local_index)] = local_atom
 
-                aa_hierarchy[cg_molecule][cg_bead].append(local_atom)
+                aa_hierarchy[aa_molecule][cg_bead].append(local_atom)
                 atom_counter+=1
             bead_counter+=1
 
 
         for atom in local_atom_list:
-            aa_molecule.add(local_atom)
-        return aa_system, aa_bonds, aa_hierarchy
+            aa_molecule.add(atom)
+    return aa_system, aa_bonds, aa_hierarchy
 
 
 
@@ -413,5 +417,6 @@ if __name__ == "__main__":
     #toc = None
     toc = 'cg_toc.json'
     recovered = reverse_map(coarse_grained, mapping_files=mapping_files, table_of_contents=toc)
+    recovered.save('rev_map.gro',overwrite=True, residues=['PR3'])
 
 
