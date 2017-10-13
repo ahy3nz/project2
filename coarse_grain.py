@@ -3,8 +3,8 @@ import numpy as np
 import mbuild as mb
 import mdtraj
 import json
-from mbuild.lib.moieties.ch2 import CH2
-from mbuild.lib.moieties.ch3 import CH3
+from mapping_moieties.ch2_aa import CH2_aa
+from mapping_moieties.ch3_aa import CH3_aa
 
 from parmed.periodic_table import Mass
 from collections import OrderedDict
@@ -64,23 +64,92 @@ cg_system (mb.Compound)
 4) Create bonds
 """
 
-def reverse_map(coarse_grained, heuristic=None, mapping_files=[], 
+def reverse_map(coarse_grained, heuristic=None, 
         table_of_contents=None, dump_toc=True):
     """ Reverse map an mb.Compound
 
     Parameters
     ---------
-    fine_grained : mb.Compound
+    coarse_grained : mb.Compound
         original structure
-    heuristic : str
-        General mapping scheme i.e. '3:1'
-    mapping_files : list of .json files
-        json file specify residue names, mappings, and bonds
-    dump_toc : bool
-        Dump out table of contents to table_of_contents.json
+    table_of_contents : dictionary
+        map molecules to global atom indices
 
     """
     # Get molecular information through bonding 
+    table_of_contents = _detect_molecules(coarse_grained)
+    # For now, just load it in 
+    #table_of_contents = json.load(open(table_of_contents,'r'),
+        #object_pairs_hook=OrderedDict)
+
+    # Establish the correct mappings
+    mapping_moieties = {'CH3':CH3_aa, 
+                        'CH2':CH2_aa}
+
+    aa_system = mb.Compound()
+    # CG to AA relates the CG bead to its AA bead
+    cg_to_aa = OrderedDict()
+
+    # For each bead, replace it with the appropraite mb compound
+    particles = [p for p in coarse_grained.particles()]
+    #for molecule in table_of_contents.keys():
+    for molecule in table_of_contents:
+        new_molecule =  mb.Compound()
+        old_atom = None
+        #for bead_index in table_of_contents[molecule]:
+        for bead in molecule:
+            #new_atom = mapping_moieties[particles[bead_index].name]()
+            new_atom = mapping_moieties[bead.name]()
+            cg_to_aa[bead] = new_atom
+#            if old_atom:
+#                pdb.set_trace()
+#                mb.force_overlap(old_atom, 
+#                        from_positions=old_atom.available_ports()[0],
+#                        to_positions=new_atom.available_ports()[0])
+
+            new_atom.translate_to(bead.pos)
+            old_atom = new_atom
+            new_molecule.add(new_atom)
+        aa_system.add(new_molecule)
+
+    # Go back and include bonds
+    for p_i, p_j in coarse_grained.bonds():
+        mb.force_overlap(cg_to_aa[p_i],
+                from_positions=cg_to_aa[p_i].available_ports()[0],
+                to_positions=cg_to_aa[p_j].available_ports()[0])
+    return aa_system
+    
+
+def _detect_molecules(coarse_grained):
+    """ Get each molecule using bond graph
+
+    Returns
+    ------
+    molecules: list of lists
+        Each list contains the connected components
+        However it isn't ordered by connectivity
+    """
+    molecules = coarse_grained.bond_graph.connected_components()
+
+    return molecules
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     #if mapping_files:
 
@@ -301,31 +370,6 @@ def _compute_center_of_mass(fine_grained, atom_indices):
     return com 
 
 
-if __name__ == "__main__":
-    fine_grained = mb.load('testing/two_propane.gro')
-    mapping_files =['testing/propane.json']
-    fine_grained.name = ""
-    residues=['PR3']
-    toc = 'testing/two_propane_aa_toc.json'
-    #toc = None
-
-    coarse_grained = forward_map(fine_grained, mapping_files=mapping_files, table_of_contents=toc)
-
-    # Save
-    coarse_grained.save('fwd_map.top',overwrite=True)
-    coarse_grained.save('fwd_map.gro',overwrite=True, residues=residues)
-    coarse_grained.save('fwd_map.mol2',overwrite=True, residues=residues)
-
-
-    ## here comes the reversemapping
-    #toc = None
-    #toc = 'cg_toc.json'
-    toc = 'testing/two_propane_cg_toc.json'
-    recovered = reverse_map(coarse_grained, mapping_files=mapping_files, table_of_contents=toc)
-    recovered.save('rev_map.gro',overwrite=True, residues=residues)
-    recovered.save('rev_map.mol2',overwrite=True, residues=residues)
-
-
 
 
 
@@ -468,4 +512,31 @@ def _fill_cg_outline(fine_grained, cg_system, cg_hierarchy):
             cg_molecule.add(new_bead)
 
     return cg_system
+
+if __name__ == "__main__":
+    #fine_grained = mb.load('testing/two_propane.gro')
+    mapping_files =['testing/propane.json']
+    #fine_grained.name = ""
+    residues=['PR3']
+    #toc = 'testing/two_propane_aa_toc.json'
+    ##toc = None
+
+    #coarse_grained = forward_map(fine_grained, mapping_files=mapping_files, table_of_contents=toc)
+
+    ## Save
+    #coarse_grained.save('fwd_map.top',overwrite=True)
+    #coarse_grained.save('fwd_map.gro',overwrite=True, residues=residues)
+    #coarse_grained.save('fwd_map.mol2',overwrite=True, residues=residues)
+
+
+    ## here comes the reversemapping
+    #toc = None
+    #toc = 'cg_toc.json'
+    toc = 'testing/two_propane_cg_toc.json'
+    coarse_grained = mb.load('sample_cg_two_propane.mol2')
+    recovered = reverse_map(coarse_grained, table_of_contents=toc)
+    recovered.save('rev_map.gro',overwrite=True, residues=residues)
+    recovered.save('rev_map.mol2',overwrite=True, residues=residues)
+
+
 
