@@ -95,20 +95,11 @@ def reverse_map(coarse_grained, heuristic=None,
     #for molecule in table_of_contents.keys():
     for molecule in table_of_contents:
         new_molecule =  mb.Compound()
-        old_atom = None
         #for bead_index in table_of_contents[molecule]:
         for bead in molecule:
             #new_atom = mapping_moieties[particles[bead_index].name]()
             new_atom = mapping_moieties[bead.name]()
             cg_to_aa[bead] = new_atom
-#            if old_atom:
-#                pdb.set_trace()
-#                mb.force_overlap(old_atom, 
-#                        from_positions=old_atom.available_ports()[0],
-#                        to_positions=new_atom.available_ports()[0])
-
-            new_atom.translate_to(bead.pos)
-            old_atom = new_atom
             new_molecule.add(new_atom)
         aa_system.add(new_molecule)
 
@@ -117,6 +108,10 @@ def reverse_map(coarse_grained, heuristic=None,
         mb.force_overlap(cg_to_aa[p_i],
                 from_positions=cg_to_aa[p_i].available_ports()[0],
                 to_positions=cg_to_aa[p_j].available_ports()[0])
+
+    # Translate atoms after they've been bonded
+    for cg,aa in cg_to_aa.items():
+        aa.translate_to(cg.pos)
     return aa_system
     
 
