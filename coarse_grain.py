@@ -120,7 +120,7 @@ def reverse_map(coarse_grained, heuristic=None,
     aa_system = _energy_minimize_loop(aa_system, cg_to_aa, n_iter=10)
     return aa_system
 
-def _energy_minimize_loop(aa_system, cg_to_aa, n_iter=10):
+def _energy_minimize_loop(aa_system, cg_to_aa, n_iter=10, rel_tol=1e-2):
     """ Minimize reverse-mapped structure according to rmsd
 
     aa_system : mb.Compound()
@@ -128,12 +128,16 @@ def _energy_minimize_loop(aa_system, cg_to_aa, n_iter=10):
         Relates CG bead (mb.Compound) to its AA representation (mb.Compound)
     n_iter : int
         Number of iterations for EM loop
+    rel_tol : float
+        Relative tolerance for RMSD comparisons 
         """
     loop_counter = 0
-    rmsd = 1000
-    rmsd_tol = 10
+    rel_err_i = 100
+    old_rmsd = _compute_rmsd(cg_to_aa)
+    print("Initial RMSD: {old_rmsd}".format(**locals()))
+
     # n_iterations or rmsd tolerance
-    while loop_counter < n_iter and rmsd > rmsd_tol:
+    while loop_counter < n_iter and rel_err_i > rel_tol:
         # Translate AA particles back to CG position
         for cg_particle, aa_particles in cg_to_aa.items():
             aa_particles.translate_to(cg_particle.pos)
@@ -142,8 +146,14 @@ def _energy_minimize_loop(aa_system, cg_to_aa, n_iter=10):
         aa_system.energy_minimization()
 
         # Measure RMSD
-        rmsd = _compute_rmsd(cg_to_aa)
-        print("RMSD({loop_counter}): {rmsd}".format(**locals()))
+        new_rmsd = _compute_rmsd(cg_to_aa)
+        print("RMSD ({loop_counter}): {new_rmsd}".format(**locals()))
+
+        # Compute relative error
+        rel_err_i = (new_rmsd - old_rmsd)/old_rmsd
+
+        # While loop things
+        old_rmsd = new_rmsd
         loop_counter+=1
 
     return aa_system
