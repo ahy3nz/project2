@@ -87,11 +87,11 @@ def reverse_map(coarse_grained, heuristic=None,
                         'CH2':CH2_aa}
 
     aa_system = mb.Compound()
-    # CG to AA relates the CG bead to its AA bead
+    # CG to AA relates the CG bead to its AA representation
     cg_to_aa = OrderedDict()
 
     # For each bead, replace it with the appropraite mb compound
-    particles = [p for p in coarse_grained.particles()]
+    #particles = [p for p in coarse_grained.particles()]
     #for molecule in table_of_contents.keys():
     for molecule in table_of_contents:
         new_molecule =  mb.Compound()
@@ -100,6 +100,7 @@ def reverse_map(coarse_grained, heuristic=None,
             #new_atom = mapping_moieties[particles[bead_index].name]()
             new_atom = mapping_moieties[bead.name]()
             cg_to_aa[bead] = new_atom
+            new_atom.translate(bead.pos)
             new_molecule.add(new_atom)
         aa_system.add(new_molecule)
 
@@ -112,7 +113,50 @@ def reverse_map(coarse_grained, heuristic=None,
     # Translate atoms after they've been bonded
     for cg,aa in cg_to_aa.items():
         aa.translate_to(cg.pos)
+
+
+    # Iterative energy minimization
+    # Energy minimize, compute RMSD, check tolerance, translate back to com 
+    aa_system = _energy_minimize_loop(aa_system, cg_to_aa, n_iter=10)
     return aa_system
+
+def _energy_minimize_loop(aa_system, cg_to_aa, n_iter=10):
+    """ Minimize reverse-mapped structure according to rmsd
+
+    aa_system : mb.Compound()
+    cg_to_aa : OrderedDict()
+        Relates CG bead (mb.Compound) to its AA representation (mb.Compound)
+    n_iter : int
+        Number of iterations for EM loop
+        """
+    loop_counter = 0
+    rmsd = 1000
+    rmsd_tol = 10
+    # n_iterations or rmsd tolerance
+    while loop_counter < n_iter and rmsd > rmsd_tol:
+        # Translate AA particles back to CG position
+        for cg_particle, aa_particles in cg_to_aa.items():
+            aa_particles.translate_to(cg_particle.pos)
+
+        # Minimize energy
+        aa_system.energy_minimization()
+
+        # Measure RMSD
+        rmsd = _compute_rmsd(cg_to_aa)
+        print("RMSD({loop_counter}): {rmsd}".format(**locals()))
+        loop_counter+=1
+
+    return aa_system
+
+def _compute_rmsd(cg_to_aa):
+    """ Compute RMSD via centes of masses of beads"""
+    rmsd = 0
+    for cg_particle, aa_particles in cg_to_aa.items():
+        cg_com = cg_particle.pos
+        aa_com = _compute_center_of_mass(aa_particles.children)
+        rmsd += sum([(cg_com[i] - aa_com[i])**2 for i in range(3)])
+    return rmsd
+
     
 
 def _detect_molecules(coarse_grained):
@@ -354,14 +398,14 @@ def _apply_heuristic(fine_grained, heuristic):
     # Identify groups of atoms according to heuristic
     return None
 
-def _compute_center_of_mass(fine_grained, atom_indices):
+def _compute_center_of_mass(particles):
     """ Compute center of mass"""
-    masses = [Mass[fine_grained.children[index].name[0:1]] for index in atom_indices]
+    masses = [Mass[particle.name[0:1]] for particle in particles]
     total_mass = sum(masses)
     com = np.ndarray(3)
     for i in range(3):
-        com[i] = sum([fine_grained.children[index].pos[i]*mass/total_mass 
-            for index,mass in zip(atom_indices,masses)])
+        com[i] = sum([particle.pos[i]*mass/total_mass 
+            for particle, mass in zip(particles, masses)])
     return com 
 
 
@@ -502,9 +546,10 @@ def _fill_cg_outline(fine_grained, cg_system, cg_hierarchy):
     
     for cg_molecule in cg_hierarchy.keys():
         for bead in cg_hierarchy[cg_molecule]:
-            new_bead = mb.Compound(name=bead.split("-")[0], 
-                    pos=_compute_center_of_mass(fine_grained, cg_hierarchy[cg_molecule][bead]))
-            cg_molecule.add(new_bead)
+            #new_bead = mb.Compound(name=bead.split("-")[0], 
+                    #pos=_compute_center_of_mass(fine_grained, cg_hierarchy[cg_molecule][bead]))
+            #cg_molecule.add(new_bead)
+            print("")
 
     return cg_system
 
